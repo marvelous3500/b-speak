@@ -46,7 +46,6 @@ mpi4py
 
 transformers torch huggingface-hub
 
-# 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
 
 # pip3 install -r requirements.txt
 

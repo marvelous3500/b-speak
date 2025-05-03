@@ -4,7 +4,7 @@ from huggingface_hub import snapshot_download , login
 import argparse
 
 
-login(token="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")
+# login(token="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")
 def download_model(model_id: str, output_dir: str):
     try:
         # Download model
