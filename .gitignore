@@ -3,5 +3,3 @@ venv/
 .env
 node_modules/
 *.log
-requirements.txt
-download_deepseek.py
