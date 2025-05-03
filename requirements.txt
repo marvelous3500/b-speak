@@ -44,9 +44,6 @@ typing-extensions>=4.0.0
 huggingface_hub
 mpi4py
 
-transformers torch huggingface-hub
-
-
 # pip3 install -r requirements.txt
 
 # python3 -m venv venv
