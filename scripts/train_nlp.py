@@ -1,19 +1,18 @@
-# banking_voice_assistant/scripts/train_nlp.py
-
 import os
 import warnings
 from datetime import datetime
 import logging
+import torch
 
 # Environment configuration
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 warnings.filterwarnings("ignore", category=Warning, module="urllib3")
 
 # Third-party imports
 import pandas as pd
 from sklearn.model_selection import train_test_split
-import deepspeed
-from deepspeed.accelerator import get_accelerator
 
 # Local application imports
 from nlp_processing.intent_classifier.trainer import IntentClassifierTrainer
@@ -32,32 +31,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 INTENTS = [
-            'transfer', 'payment', 'balance_check', "card_arrival", "card_linking",
-            "exchange_rate", "card_payment_wrong_exchange_rate", "extra_charge_on_statement",
-            "pending_cash_withdrawal", "fiat_currency_support", "card_delivery_estimate",
-            "automatic_top_up", "card_not_working", "exchange_via_app", "lost_or_stolen_card",
-            "age_limit", "pin_blocked", "contactless_not_working", "top_up_by_bank_transfer_charge",
-            "pending_top_up", "cancel_transfer", "top_up_limits", "wrong_amount_of_cash_received",
-            "card_payment_fee_charged", "transfer_not_received_by_recipient", 
-            "supported_cards_and_currencies", "getting_virtual_card", "card_acceptance",
-            "top_up_reverted", "balance_not_updated_after_cheque_or_cash_deposit",
-            "card_payment_not_recognised", "edit_personal_details", "why_verify_identity",
-            "unable_to_verify_identity", "get_physical_card", "visa_or_mastercard",
-            "topping_up_by_card", "disposable_card_limits", "compromised_card", "atm_support",
-            "direct_debit_payment_not_recognised", "passcode_forgotten", "declined_cash_withdrawal",
-            "pending_card_payment", "lost_or_stolen_phone", "request_refund", "declined_transfer",
-            "Refund_not_showing_up", "declined_card_payment", "pending_transfer", "terminate_account",
-            "card_swallowed", "transaction_charged_twice", "verify_source_of_funds", "transfer_timing",
-            "reverted_card_payment", "change_pin", "beneficiary_not_allowed", "transfer_fee_charged",
-            "receiving_money", "failed_transfer", "transfer_into_account", "verify_top_up",
-            "getting_spare_card", "top_up_by_cash_or_cheque", "order_physical_card",
-            "virtual_card_not_working", "wrong_exchange_rate_for_cash_withdrawal",
-            "get_disposable_virtual_card", "top_up_failed", "balance_not_updated_after_bank_transfer",
-            "cash_withdrawal_not_recognised", "exchange_charge", "top_up_by_card_charge",
-            "activate_my_card", "cash_withdrawal_charge", "card_about_to_expire",
-            "apple_pay_or_google_pay", "verify_my_identity", "country_support", "declined_card_payment",
-            "card_not_working","lost_or_stolen_card", "default_intent", "reverted_card_payment?"
-        ]
+    'transfer', 'payment', 'balance_check', "card_arrival", "card_linking",
+    "exchange_rate",
+    # ... (keep all your existing intents)
+]
 
 DATA_DIR = "data/conversations"
 VOCAB_PATH = "data/vocab/nlp_vocab.txt"
@@ -108,7 +85,6 @@ def prepare_data():
 
 @timer_decorator
 def train_models():
-    """Train both intent and fraud detection models."""
     try:
         # Initialize vocabulary
         logger.info("Initializing vocabulary...")
@@ -126,26 +102,28 @@ def train_models():
         vocab.save(VOCAB_PATH)
         logger.info(f"Vocabulary saved with {len(vocab.tokenizer)} tokens")
         
+        # Set device
+        device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Using device: {device}")
+        
         # Train intent classifier
         logger.info("Training intent classifier...")
         intent_trainer = IntentClassifierTrainer(INTENTS)
+        
+        # Modified training call without DeepSpeed
         intent_trainer.train(
             data_path=os.path.join(DATA_DIR, "processed/intent_train.csv"),
             vocab_path=VOCAB_PATH,
-            output_path=os.path.join(MODEL_DIR, "intent_model"),
+            output_path=os.path.join(MODEL_DIR, "intent_model.keras"),
             epochs=15,
-            batch_size=64
+            batch_size=64,
         )
 
-        logger.info("Intent classifier training completed")
-        
-        # Train fraud detector
         logger.info("Training fraud detection model...")
-        fraud_trainer = FraudDetectorTrainer()
+        fraud_trainer = FraudDetectionTrainer()
         fraud_trainer.train(
             data_path=os.path.join(DATA_DIR, "processed/fraud_train.csv"),
-            vocab_path=VOCAB_PATH,
-            output_path=os.path.join(MODEL_DIR, "fraud_model.h5")
+            output_path=os.path.join(MODEL_DIR, "fraud_model.keras")
         )
         logger.info("Fraud detection model training completed")
         
@@ -156,6 +134,11 @@ def train_models():
 if __name__ == "__main__":
     logger.info("=== Starting NLP Training Pipeline ===")
     try:
+        # Verify torch setup
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"MPS available: {torch.backends.mps.is_available()}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        
         prepare_data()
         train_models()
         logger.info("=== Training completed successfully ===")

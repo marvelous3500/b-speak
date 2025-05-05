@@ -1,91 +1,83 @@
-# banking_voice_assistant/nlp_processing/fraud_detector/model.py
-import numpy as np
 import tensorflow as tf
-from typing import Tuple, Optional, Dict
-
+from typing import Optional, Dict, Any
 
 class FraudDetectionModel:
-    """Fraud detection model for banking conversations."""
-    
-    def __init__(self, model_config: Optional[Dict] = None):
+    def __init__(self, num_features: Optional[int] = None):
         """
-        Initialize the fraud detection model.
+        Initialize fraud detection model.
         
         Args:
-            model_config: Configuration dictionary for model parameters
+            num_features: Number of input features. Must be provided before building model.
         """
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        self.model_config = model_config or {
-            "embedding_dim": 128,
-            "lstm_units": 64,
-            "dense_units": 32,
-            "threshold": 0.5
-        }
-        
+        self.num_features = num_features
         self.model = None
     
-    def build_model(self, vocab_size: int) -> None:
-        """Build the fraud detection model architecture."""
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Embedding(
-                input_dim=vocab_size,
-                output_dim=self.model_config["embedding_dim"],
-                mask_zero=True,
-                name="embedding"
-            ),
-            tf.keras.layers.Bidirectional(
-                tf.keras.layers.LSTM(
-                    self.model_config["lstm_units"],
-                    return_sequences=False,
-                    name="lstm"
-                ),
-                name="bidirectional"
-            ),
-            tf.keras.layers.Dense(
-                self.model_config["dense_units"],
-                activation='relu',
-                name="dense"
-            ),
-            tf.keras.layers.Dense(
-                1,
-                activation='sigmoid',
-                name="output"
-            )
-        ])
-    
-    def compile_model(self) -> None:
-        """Compile the model with appropriate loss and metrics."""
-        if self.model is None:
-            raise ValueError("Model must be built before compilation")
-            
-        self.model.compile(
-            optimizer='adam',
-            loss='binary_crossentropy',
-            metrics=['accuracy']
-        )
-    
-    def predict(self, input_sequence: np.ndarray) -> Tuple[bool, float]:
+    def build_model(self, compile_kwargs: Optional[Dict[str, Any]] = None) -> tf.keras.Model:
         """
-        Make a fraud prediction.
+        Build and compile the fraud detection model for numerical features.
         
         Args:
-            input_sequence: Padded and tokenized input sequence
-            
+            compile_kwargs: Optional dictionary of arguments for model compilation.
+                           Defaults to Adam optimizer with binary_crossentropy loss.
+        
         Returns:
-            Tuple of (is_fraud, confidence)
+            Compiled Keras model
+        
+        Raises:
+            ValueError: If num_features was not provided during initialization
+        """
+        if self.num_features is None:
+            raise ValueError("num_features must be specified to build model")
+            
+        inputs = tf.keras.Input(shape=(self.num_features,))
+        
+        # Neural network architecture
+        x = tf.keras.layers.Dense(
+            128, 
+            activation='relu',
+            kernel_initializer='he_normal'
+        )(inputs)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.3)(x)
+        x = tf.keras.layers.Dense(
+            64, 
+            activation='relu',
+            kernel_initializer='he_normal'
+        )(x)
+        
+        # Output layer (binary classification)
+        outputs = tf.keras.layers.Dense(1, activation='sigmoid')(x)
+        
+        self.model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        
+        # Default compilation parameters
+        default_compile_kwargs = {
+            'optimizer': tf.keras.optimizers.Adam(learning_rate=0.001),
+            'loss': 'binary_crossentropy',
+            'metrics': ['accuracy']
+        }
+        
+        # Update with any user-provided kwargs
+        if compile_kwargs:
+            default_compile_kwargs.update(compile_kwargs)
+        
+        self.model.compile(**default_compile_kwargs)
+        return self.model
+    
+    def save(self, filepath: str, **kwargs) -> None:
+        """
+        Save the model to disk.
+        
+        Args:
+            filepath: Path to save the model (should end with .keras)
+            **kwargs: Additional arguments to pass to model.save()
         """
         if self.model is None:
-            raise ValueError("Model not loaded")
-            
-        prediction = self.model.predict(input_sequence, verbose=0)
-        confidence = float(prediction[0][0])
-        return confidence > self.model_config["threshold"], confidence
+            raise RuntimeError("Model must be built before saving")
+        self.model.save(filepath, **kwargs)
     
-    def save(self, model_path: str) -> None:
-        """Save the model to disk."""
-        if self.model:
-            self.model.save(model_path)
-    
-    def load(self, model_path: str) -> None:
-        """Load the model from disk."""
-        self.model = tf.keras.models.load_model(model_path)
+    def summary(self) -> None:
+        """Print model summary."""
+        if self.model is None:
+            raise RuntimeError("Model must be built before showing summary")
+        self.model.summary()

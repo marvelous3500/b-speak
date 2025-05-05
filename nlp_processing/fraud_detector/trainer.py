@@ -1,97 +1,125 @@
-# banking_voice_assistant/nlp_processing/fraud_detector/trainer.py
-
+from typing import Optional, Tuple, Dict, List
 import tensorflow as tf
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple 
+import logging
+from pathlib import Path
 import os
-from .model import FraudDetectionModel  # Relative import
 
 
 class FraudDetectionTrainer:
-    """Handles training of the fraud detection model."""
-    
-    def __init__(self, model: FraudDetectionModel):
+    def __init__(self, model=None):
         self.model = model
+        self._configure_tensorflow()
+        
+    def _configure_tensorflow(self):
+        try:
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            logging.info("Enabled mixed precision training")
+        except ValueError:
+            pass
     
     def prepare_training_data(
         self,
-        data_path: str,
-        tokenizer: Dict[str, int],
-        max_sequence_length: Optional[int] = None,
-        pad_token_id: int = 0
+        data_path: str
     ) -> Tuple[np.ndarray, np.ndarray, int]:
         """
-        Prepare fraud detection training data.
-        
-        Args:
-            data_path: Path to fraud data CSV
-            tokenizer: Word to index mapping
-            max_sequence_length: Maximum sequence length for padding
-            pad_token_id: ID of padding token
-            
-        Returns:
-            Tuple of (X, y, max_sequence_length)
+        Prepare numerical fraud detection training data.
         """
         df = pd.read_csv(data_path)
-        texts = df["text"].values
-        labels = df["is_fraud"].values
         
-        # Convert texts to sequences
-        tokenized = [
-            [tokenizer.get(word.lower(), 0) for word in str(text).split()]
-            for text in texts
-        ]
+        # Use whichever fraud label column exists
+        fraud_col = 'is_fraud' if 'is_fraud' in df.columns else 'isFraud'
         
-        # Determine max sequence length
-        if max_sequence_length is None:
-            max_sequence_length = max(len(seq) for seq in tokenized)
+        # Select numerical features only
+        numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
+        numerical_cols = [col for col in numerical_cols if col != fraud_col]
         
-        # Pad sequences
-        X = tf.keras.preprocessing.sequence.pad_sequences(
-            tokenized,
-            maxlen=max_sequence_length,
-            padding='post',
-            truncating='post',
-            value=pad_token_id
-        )
+        X = df[numerical_cols].values
+        y = df[fraud_col].values.astype(int)
         
-        return X, labels, max_sequence_length
+        return X, y, X.shape[1]  # Return number of features
+    
+    def create_dataset(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        batch_size: int = 64,
+        shuffle: bool = True,
+        buffer_size: int = 10000
+    ) -> tf.data.Dataset:
+        """
+        Create TensorFlow Dataset for efficient training.
+        """
+        dataset = tf.data.Dataset.from_tensor_slices((X, y))
+        
+        if shuffle:
+            dataset = dataset.shuffle(buffer_size)
+            
+        return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     
     def train(
         self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        X_val: Optional[np.ndarray] = None,
-        y_val: Optional[np.ndarray] = None,
+        data_path: str,
+        output_path: str,
         epochs: int = 10,
         batch_size: int = 64,
-        callbacks: Optional[List[tf.keras.callbacks.Callback]] = None
+        val_split: float = 0.2
     ) -> tf.keras.callbacks.History:
         """
-        Train the fraud detection model.
-        
-        Args:
-            X_train: Training input sequences
-            y_train: Training labels
-            X_val: Validation input sequences
-            y_val: Validation labels
-            epochs: Number of training epochs
-            batch_size: Batch size for training
-            callbacks: List of Keras callbacks
-            
-        Returns:
-            Training history
+        Complete training pipeline for fraud detection.
         """
-        if self.model.model is None:
-            raise ValueError("Model must be built before training")
+        try:
+            # Prepare data
+            X, y, num_features = self.prepare_training_data(data_path)
             
-        return self.model.model.fit(
-            X_train,
-            y_train,
-            validation_data=(X_val, y_val) if X_val is not None else None,
-            epochs=epochs,
-            batch_size=batch_size,
-            callbacks=callbacks or [],
-            verbose=1
-        )
+            # Split into train/validation
+            val_size = int(len(X) * val_split)
+            X_train, X_val = X[:-val_size], X[-val_size:]
+            y_train, y_val = y[:-val_size], y[-val_size:]
+            
+            # Create datasets
+            train_dataset = self.create_dataset(X_train, y_train, batch_size)
+            val_dataset = self.create_dataset(X_val, y_val, batch_size, shuffle=False)
+            
+            # Initialize model if not provided
+            if self.model is None:
+                from .model import FraudDetectionModel
+                self.model = FraudDetectionModel(num_features=num_features)
+                self.model.build_model()
+            
+            # Callbacks
+            callbacks = [
+                tf.keras.callbacks.ModelCheckpoint(
+                    filepath=os.path.join(output_path, 'best_model.keras'),
+                    save_best_only=True,
+                    monitor='val_loss',
+                    mode='min'
+                ),
+                tf.keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
+                    patience=3,
+                    restore_best_weights=True
+                )
+            ]
+            
+            # Train model
+            logging.info("Starting fraud detection model training...")
+            history = self.model.model.fit(
+                train_dataset,
+                validation_data=val_dataset,
+                epochs=epochs,
+                callbacks=callbacks,
+                verbose=2 if logging.getLogger().level == logging.INFO else 1
+            )
+            
+            # Save final model
+            self.model.model.save(os.path.join(output_path, 'fraud_model.keras'))
+            logging.info(f"Training complete. Model saved to {output_path}")
+            
+            return history
+            
+        except Exception as e:
+            logging.error(f"Fraud detection training failed: {str(e)}")
+            raise

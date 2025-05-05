@@ -44,10 +44,10 @@ typing-extensions>=4.0.0
 huggingface_hub
 mpi4py
 
-# pip3 install -r requirements.txt
+
 
 # python3 -m venv venv
 # source venv/bin/activate  # Linux/Mac
 # venv\Scripts\activate    # Windows
-
-#    mypy nlp_processing/
+# pip3 install -r requirements.txt
+ #python3 -mscripts.train_nlp     
