@@ -23,12 +23,60 @@ class IntentClassifierTrainer:
         except ValueError:
             pass
 
+    # def _load_training_data(self, data_path: str) -> Tuple[List[str], List[int]]:
+    #     """Load and preprocess training data"""
+    #     df = pd.read_csv(data_path)
+    #     texts = df['text'].astype(str).tolist()
+    #     labels = [self.label_map[label] for label in df['category']]
+    #     return texts, labels
+
+
     def _load_training_data(self, data_path: str) -> Tuple[List[str], List[int]]:
-        """Load and preprocess training data"""
-        df = pd.read_csv(data_path)
-        texts = df['text'].astype(str).tolist()
-        labels = [self.label_map[label] for label in df['category']]
-        return texts, labels
+        try:
+            # Load data with explicit dtype and NaN handling
+            df = pd.read_csv(
+                data_path,
+                dtype={'text': str, 'category': str},
+                usecols=['text', 'category'],  # Only load needed columns
+                na_values=['', ' ', 'nan', 'NaN', 'N/A', 'null'],
+                keep_default_na=True
+            )
+            
+            # Drop rows with missing values in either column
+            df = df.dropna(subset=['text', 'category'])
+            
+            # Validate we have data remaining
+            if len(df) == 0:
+                raise ValueError("No valid training data after NaN removal")
+                
+            # Convert texts
+            texts = df['text'].str.strip().tolist()
+            
+            # Convert labels with validation
+            valid_labels = []
+            valid_texts = []
+            missing_labels = set()
+            
+            for text, label in zip(df['text'], df['category']):
+                if label in self.label_map:
+                    valid_labels.append(self.label_map[label])
+                    valid_texts.append(text)
+                else:
+                    missing_labels.add(label)
+            
+            # Log warnings about missing labels
+            if missing_labels:
+                logger.warning(f"{len(missing_labels)} unknown labels encountered: {missing_labels}")
+                logger.warning(f"Dropped {len(df) - len(valid_labels)} samples with invalid labels")
+            
+            if not valid_labels:
+                raise ValueError("No valid labels found after filtering")
+                
+            return valid_texts, valid_labels
+            
+        except Exception as e:
+            logger.error(f"Failed to load training data: {str(e)}")
+            raise
 
     def _create_tokenizer(self, texts: List[str]) -> tf.keras.preprocessing.text.Tokenizer:
         """Create and fit tokenizer on texts"""

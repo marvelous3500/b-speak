@@ -3,6 +3,12 @@ import warnings
 from datetime import datetime
 import logging
 import torch
+from tensorflow.keras.layers import TextVectorization
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+import logging
+import shutil
+from datetime import datetime
 
 # Environment configuration
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
@@ -31,9 +37,88 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 INTENTS = [
-    'transfer', 'payment', 'balance_check', "card_arrival", "card_linking",
+    'transfer',
+    'payment',
+    'balance_check',
+    "card_arrival", 
     "exchange_rate",
-    # ... (keep all your existing intents)
+    "card_linking",
+    "exchange_rate",
+    "card_payment_wrong_exchange_rate",
+    "extra_charge_on_statement",
+    "pending_cash_withdrawal",
+    "fiat_currency_support",
+    "card_delivery_estimate",
+    "automatic_top_up",
+    "card_not_working",
+    "exchange_via_app",
+    "lost_or_stolen_card",
+    "age_limit",
+    "pin_blocked",
+    "contactless_not_working",
+    "top_up_by_bank_transfer_charge",
+    "pending_top_up",
+    "cancel_transfer",
+    "top_up_limits",
+    "wrong_amount_of_cash_received",
+    "card_payment_fee_charged",
+    "transfer_not_received_by_recipient",
+    "supported_cards_and_currencies",
+    "getting_virtual_card",
+    "card_acceptance",
+    "top_up_reverted",
+    "balance_not_updated_after_cheque_or_cash_deposit",
+    "card_payment_not_recognised",
+    "edit_personal_details",
+    "why_verify_identity",
+    "unable_to_verify_identity",
+    "get_physical_card",
+    "visa_or_mastercard",
+    "topping_up_by_card",
+    "disposable_card_limits",
+    "compromised_card",
+    "atm_support",
+    "direct_debit_payment_not_recognised",
+    "passcode_forgotten",
+    "declined_cash_withdrawal",
+    "pending_card_payment",
+    "lost_or_stolen_phone",
+    "request_refund",
+    "declined_transfer",
+    "Refund_not_showing_up",
+    "declined_card_payment",
+    "pending_transfer",
+    "terminate_account",
+    "card_swallowed",
+    "transaction_charged_twice",
+    "verify_source_of_funds",
+    "transfer_timing",
+    "reverted_card_payment?",
+    "change_pin",
+    "beneficiary_not_allowed",
+    "transfer_fee_charged",
+    "receiving_money",
+    "failed_transfer",
+    "transfer_into_account",
+    "verify_top_up",
+    "getting_spare_card",
+    "top_up_by_cash_or_cheque",
+    "order_physical_card",
+    "virtual_card_not_working",
+    "wrong_exchange_rate_for_cash_withdrawal",
+    "get_disposable_virtual_card",
+    "top_up_failed",
+    "balance_not_updated_after_bank_transfer",
+    "cash_withdrawal_not_recognised",
+    "exchange_charge",
+    "top_up_by_card_charge",
+    "activate_my_card",
+    "cash_withdrawal_charge",
+    "card_about_to_expire",
+    "apple_pay_or_google_pay",
+    "verify_my_identity",
+    "country_support"
+    
 ]
 
 DATA_DIR = "data/conversations"
@@ -83,6 +168,24 @@ def prepare_data():
         logger.error(f"Error in prepare_data: {str(e)}")
         raise
 
+
+def save_vectorizer(vectorizer, output_dir):
+    """Saves vectorizer with proper callable signature"""
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    
+    # Create concrete function
+    @tf.function(input_signature=[tf.TensorSpec(shape=[None], dtype=tf.string)])
+    def serve(texts):
+        return {'output': vectorizer(texts)}
+    
+    # Save with signatures
+    tf.saved_model.save(
+        vectorizer,
+        output_dir,
+        signatures={'serving_default': serve}
+    )
+
 @timer_decorator
 def train_models():
     try:
@@ -101,7 +204,34 @@ def train_models():
         vocab.create_from_texts(texts)
         vocab.save(VOCAB_PATH)
         logger.info(f"Vocabulary saved with {len(vocab.tokenizer)} tokens")
+
+        # Create and adapt vectorizer
+        logger.info("Creating text vectorizer...")
+        vectorizer = TextVectorization(
+            max_tokens=10000,
+            output_sequence_length=379,
+            standardize='lower_and_strip_punctuation',
+            output_mode='int'
+        )
+        vectorizer.adapt(tf.data.Dataset.from_tensor_slices(texts).batch(128))
         
+        # Save the vectorizer properly
+        vectorizer_dir = os.path.join(MODEL_DIR, "text_vectorizer")
+        save_vectorizer(vectorizer, vectorizer_dir)
+        
+        # Verify the saved files
+        required_files = [
+            os.path.join(vectorizer_dir, "saved_model.pb"),
+            os.path.join(vectorizer_dir, "variables/variables.index"),
+            os.path.join(vectorizer_dir, "variables/variables.data-00000-of-00001")
+        ]
+        missing_files = [f for f in required_files if not os.path.exists(f)]
+        if missing_files:
+            raise RuntimeError(f"Missing vectorizer files: {missing_files}")
+        
+        logger.info("Vectorizer saved successfully with all required files")
+
+       
         # Set device
         device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {device}")
@@ -145,3 +275,5 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"!!! Training failed: {str(e)}")
         raise
+
+
